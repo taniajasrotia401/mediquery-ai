@@ -16,7 +16,6 @@ st.set_page_config(page_title="MediQuery AI", page_icon="🏥", layout="wide")
 st.title("🏥 MediQuery AI")
 st.caption("RAG-powered Medical Document Intelligence Assistant")
 
-# Sidebar
 with st.sidebar:
     st.header("⚙️ Configuration")
     groq_api_key = st.text_input("Groq API Key", type="password")
@@ -27,12 +26,12 @@ with st.sidebar:
 
 @st.cache_resource
 def build_rag_pipeline(api_key):
-    # Load data
-    df = pd.read_csv("mtsamples.csv")
+    # Load directly from URL - no file needed!
+    url = "https://raw.githubusercontent.com/taniajasrotia401/mediquery-ai/main/mtsamples.csv"
+    df = pd.read_csv(url)
     df_clean = df.dropna(subset=["transcription"]).reset_index(drop=True)
     df_sample = df_clean.sample(500, random_state=42).reset_index(drop=True)
 
-    # Build documents
     documents = []
     for _, row in df_sample.iterrows():
         content = f"""
@@ -50,19 +49,15 @@ Keywords: {row["keywords"]}
             }
         ))
 
-    # Chunk
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     chunks = splitter.split_documents(documents)
 
-    # Embed
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     vectorstore = FAISS.from_documents(chunks, embeddings)
     retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
 
-    # LLM
     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.2, groq_api_key=api_key)
 
-    # Prompt
     prompt = ChatPromptTemplate.from_template("""
 You are MediQuery AI, an intelligent medical document assistant.
 Use ONLY the context below to answer the question.
@@ -91,7 +86,6 @@ Answer:""")
 
     return rag_chain, retriever
 
-# Main UI
 if not groq_api_key:
     st.warning("👈 Please enter your Groq API key in the sidebar to get started.")
 else:
@@ -99,11 +93,9 @@ else:
         rag_chain, retriever = build_rag_pipeline(groq_api_key)
     st.success("✅ MediQuery AI is ready!")
 
-    # Chat history
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Display chat history
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -112,14 +104,11 @@ else:
                     for s in msg["sources"]:
                         st.markdown(s)
 
-    # Chat input
     if question := st.chat_input("Ask anything about medical records..."):
-        # Show user message
         st.session_state.messages.append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.markdown(question)
 
-        # Get answer + sources
         with st.chat_message("assistant"):
             with st.spinner("🔍 Searching medical records..."):
                 answer = rag_chain.invoke(question)
