@@ -17,15 +17,54 @@ st.title("🏥 MediQuery AI")
 st.caption("RAG-powered Medical Document Intelligence Assistant")
 
 with st.sidebar:
-    st.markdown("### About")
-    st.markdown("MediQuery AI uses RAG to answer questions from 5000+ real medical transcriptions.")
-    st.markdown("**Stack:** LangChain · FAISS · Llama 3 · HuggingFace")
+    st.markdown("### Configuration")
+    
+    # Provider selection dropdown
+    provider = st.selectbox(
+        "Select LLM Provider",
+        ["Groq (Free & Fast)", "OpenAI", "Ollama (Local)"]
+    )
+    
+    if provider == "Groq (Free & Fast)":
+        api_key = st.secrets.get("GROQ_API_KEY", "")
+        st.success("Using Groq — Llama 3.3 70B")
+        
+    elif provider == "OpenAI":
+        api_key = st.text_input("Enter OpenAI API Key", type="password")
+        st.info("Using OpenAI — GPT-4o")
+        
+    elif provider == "Ollama (Local)":
+        api_key = "ollama"
+        st.info("Using Ollama — runs locally, no API key needed")
 
-# Automatically load from Streamlit secrets
-groq_api_key = st.secrets["GROQ_API_KEY"]
+    st.markdown("---")
+    st.markdown("### About")
+    st.markdown("Answers questions from 5000+ real medical transcriptions with source citations.")
+    st.markdown("**Stack:** LangChain · FAISS · HuggingFace")
+
+def get_llm(provider, api_key):
+    if provider == "Groq (Free & Fast)":
+        return ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0.2,
+            groq_api_key=api_key
+        )
+    elif provider == "OpenAI":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model="gpt-4o",
+            temperature=0.2,
+            openai_api_key=api_key
+        )
+    elif provider == "Ollama (Local)":
+        from langchain_ollama import ChatOllama
+        return ChatOllama(
+            model="llama3",
+            temperature=0.2
+        )
 
 @st.cache_resource
-def build_rag_pipeline(api_key):
+def build_rag_pipeline(provider, api_key):
     url = "https://raw.githubusercontent.com/taniajasrotia401/mediquery-ai/main/mtsamples.csv"
     df = pd.read_csv(url)
     df_clean = df.dropna(subset=["transcription"]).reset_index(drop=True)
@@ -55,7 +94,7 @@ Keywords: {row["keywords"]}
     vectorstore = FAISS.from_documents(chunks, embeddings)
     retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
 
-    llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.2, groq_api_key=api_key)
+    llm = get_llm(provider, api_key)
 
     prompt = ChatPromptTemplate.from_template("""
 You are MediQuery AI, an intelligent medical document assistant.
@@ -85,42 +124,46 @@ Answer:""")
 
     return rag_chain, retriever
 
-with st.spinner("Building RAG pipeline... (first time takes ~2 mins)"):
-    rag_chain, retriever = build_rag_pipeline(groq_api_key)
-st.success("MediQuery AI is ready!")
+# Only build pipeline when provider is ready
+if provider == "OpenAI" and not api_key:
+    st.warning("Please enter your OpenAI API key in the sidebar.")
+else:
+    with st.spinner("Building RAG pipeline..."):
+        rag_chain, retriever = build_rag_pipeline(provider, api_key)
+    st.success("MediQuery AI is ready!")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if "sources" in msg:
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if "sources" in msg:
+                with st.expander("View Sources"):
+                    for s in msg["sources"]:
+                        st.markdown(s)
+
+    if question := st.chat_input("Ask anything about medical records..."):
+        st.session_state.messages.append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.markdown(question)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Searching medical records..."):
+                answer = rag_chain.invoke(question)
+                relevant_docs = retriever.invoke(question)
+                sources = list(set([
+                    f"**{doc.metadata['specialty']}** → {doc.metadata['report_name'].strip()}"
+                    for doc in relevant_docs
+                ]))
+
+            st.markdown(answer)
             with st.expander("View Sources"):
-                for s in msg["sources"]:
+                for s in sources:
                     st.markdown(s)
 
-if question := st.chat_input("Ask anything about medical records..."):
-    st.session_state.messages.append({"role": "user", "content": question})
-    with st.chat_message("user"):
-        st.markdown(question)
-
-    with st.chat_message("assistant"):
-        with st.spinner("Searching medical records..."):
-            answer = rag_chain.invoke(question)
-            relevant_docs = retriever.invoke(question)
-            sources = list(set([
-                f"**{doc.metadata['specialty']}** → {doc.metadata['report_name'].strip()}"
-                for doc in relevant_docs
-            ]))
-
-        st.markdown(answer)
-        with st.expander("View Sources"):
-            for s in sources:
-                st.markdown(s)
-
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": answer,
-        "sources": sources
-    })
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": answer,
+            "sources": sources
+        })
